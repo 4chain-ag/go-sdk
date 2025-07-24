@@ -105,87 +105,10 @@ func ValidateCertificates(
 		go func(cert *certificates.VerifiableCertificate) {
 			defer wg.Done()
 
-			notifyError := func(err error) {
-				select {
-				case <-ctx.Done():
-					return
-				default:
-					errCh <- err
-				}
+			err := ValidateCertificate(ctx, verifierWallet, cert, identityKey, certificatesRequested)
+			if err != nil && ctx.Err() == nil {
+				errCh <- fmt.Errorf("certificate validation failed: %w", err)
 			}
-
-			// Check that certificate subject matches identity key
-			subjectPubKey := &cert.Subject
-			if isEmptyPublicKey(cert.Subject) || identityKey == nil || !subjectPubKey.IsEqual(identityKey) {
-				var subjectStr, identityStr string
-				if !isEmptyPublicKey(cert.Subject) {
-					subjectStr = cert.Subject.ToDERHex()
-				}
-				if identityKey != nil {
-					identityStr = identityKey.ToDERHex()
-				}
-				notifyError(fmt.Errorf("the subject of one of your certificates (%q) is not the same as the request sender (%q)",
-					subjectStr, identityStr))
-				return
-			}
-
-			// Verify certificate structure and signature
-			// this could take some time, so check if context isn't already done
-			select {
-			case <-ctx.Done():
-				return
-			default:
-				err := cert.Verify(ctx)
-				if err != nil {
-					notifyError(fmt.Errorf("the signature for the certificate with serial number %s is invalid: %v",
-						cert.SerialNumber, err))
-					return
-				}
-			}
-
-			// Check if the certificate matches requested certifiers, types, and fields
-			if certificatesRequested != nil {
-				// Check certifier matches requested certifiers if any
-				if !isEmptyPublicKey(cert.Certifier) && len(certificatesRequested.Certifiers) > 0 {
-					certifierKey := &cert.Certifier
-					if !CertifierInSlice(certificatesRequested.Certifiers, certifierKey) {
-						notifyError(fmt.Errorf("certificate with serial number %s has an unrequested certifier: %x",
-							cert.SerialNumber, certifierKey))
-						return
-					}
-				}
-
-				// Check type match
-				if cert.Type != "" {
-					certType, err := cert.Type.ToArray()
-					if err != nil {
-						notifyError(fmt.Errorf("failed to convert certificate type to byte array: %v", err))
-						return
-					}
-					requestedFields, typeExists := certificatesRequested.CertificateTypes[certType]
-					if !typeExists {
-						notifyError(fmt.Errorf("certificate with type %s was not requested", cert.Type))
-						return
-					}
-
-					// Additional field validation could be done here if needed
-					_ = requestedFields
-				}
-			}
-
-			// Attempt to decrypt fields
-			// this could take some time, so check if the context isn't already done
-			select {
-			case <-ctx.Done():
-				return
-			default:
-				_, err := cert.DecryptFields(ctx, verifierWallet, false, "")
-				if err != nil {
-					notifyError(fmt.Errorf("failed to decrypt certificate fields: %v", err))
-					return
-				}
-			}
-			// If we reach here, this certificate is valid
 		}(incomingCert)
 	}
 
@@ -208,6 +131,112 @@ func ValidateCertificates(
 		cancel()
 		return ctx.Err()
 	}
+}
+
+func ValidateCertificate(
+	ctx context.Context,
+	verifierWallet wallet.Interface,
+	cert *certificates.VerifiableCertificate,
+	identityKey *ec.PublicKey,
+	certificatesRequested *RequestedCertificateSet,
+) error {
+
+	// check for the context end
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if err := verifySubjectIdentityKey(cert, identityKey); err != nil {
+		return err
+	}
+
+	// check for the context end
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if err := cert.Verify(ctx); err != nil {
+		return fmt.Errorf("the signature for the certificate with serial number %s is invalid: %v",
+			cert.SerialNumber, err)
+	}
+
+	// check for the context end
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if err := verifyForRequestCertificates(cert, certificatesRequested); err != nil {
+		return err
+	}
+
+	// check for the context end
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if _, err := cert.DecryptFields(ctx, verifierWallet, false, ""); err != nil {
+		return fmt.Errorf("failed to decrypt certificate fields: %v", err)
+	}
+
+	return nil
+}
+
+func verifyForRequestCertificates(cert *certificates.VerifiableCertificate, certificatesRequested *RequestedCertificateSet) error {
+	if certificatesRequested == nil {
+		return nil
+	}
+
+	if err := verifyRequestedCertifier(cert, certificatesRequested); err != nil {
+		return err
+	}
+
+	return verifyForRequestedType(cert, certificatesRequested)
+}
+
+func verifyForRequestedType(cert *certificates.VerifiableCertificate, certificatesRequested *RequestedCertificateSet) error {
+	if cert.Type == "" {
+		return nil
+	}
+
+	certType, err := cert.Type.ToArray()
+	if err != nil {
+		return fmt.Errorf("failed to convert certificate type to byte array: %v", err)
+	}
+
+	requestedFields, typeExists := certificatesRequested.CertificateTypes[certType]
+	if !typeExists {
+		return fmt.Errorf("certificate with type %s was not requested", cert.Type)
+	}
+
+	// Additional field validation could be done here if needed
+	_ = requestedFields
+
+	return nil
+}
+
+func verifyRequestedCertifier(cert *certificates.VerifiableCertificate, certificatesRequested *RequestedCertificateSet) error {
+	if len(certificatesRequested.Certifiers) == 0 {
+		return nil
+	}
+
+	if !isEmptyPublicKey(cert.Certifier) && !CertifierInSlice(certificatesRequested.Certifiers, &cert.Certifier) {
+		return fmt.Errorf("certificate with serial number %s has an unrequested certifier: %s",
+			cert.SerialNumber, cert.Certifier.ToDERHex())
+	}
+	return nil
+}
+
+func verifySubjectIdentityKey(cert *certificates.VerifiableCertificate, identityKey *ec.PublicKey) error {
+	subjectPubKey := &cert.Subject
+	if isEmptyPublicKey(cert.Subject) || identityKey == nil || !subjectPubKey.IsEqual(identityKey) {
+		var subjectStr, identityStr string
+		if !isEmptyPublicKey(cert.Subject) {
+			subjectStr = cert.Subject.ToDERHex()
+		}
+		if identityKey != nil {
+			identityStr = identityKey.ToDERHex()
+		}
+		return fmt.Errorf("the subject of one of your certificates (%q) is not the same as the request sender (%q)",
+			subjectStr,
+			identityStr)
+	}
+	return nil
 }
 
 // ValidateRequestedCertificateSet validates that a RequestedCertificateSet is properly formatted
