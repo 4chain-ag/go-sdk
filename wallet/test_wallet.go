@@ -134,7 +134,7 @@ type MockWalletMethods[A, R any] struct {
 func (m *MockWalletMethods[A, R]) ExpectOriginator(expectedOriginator string) *MockWalletMethods[A, R] {
 	m.t.Helper()
 	m.Expect(func(ctx context.Context, args A, originator string) {
-		assert.Equal(m.t, originator, expectedOriginator)
+		assert.Equal(m.t, expectedOriginator, originator)
 	})
 	return m
 }
