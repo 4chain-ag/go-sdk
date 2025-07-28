@@ -13,9 +13,9 @@ import (
 	"github.com/bsv-blockchain/go-sdk/wallet"
 )
 
+const workerPoolSize = 10
+
 var (
-	ErrEmptyCertificates     = errors.New("empty certificates")
-	ErrInvalidCertificate    = errors.New("invalid certificate format")
 	ErrCertificateValidation = errors.New("certificate validation failed")
 )
 
@@ -94,26 +94,38 @@ func ValidateCertificates(
 
 	// Use a wait group to wait for all certificate validations to complete
 	var wg sync.WaitGroup
-	errCh := make(chan error, len(certs))
-
 	var cancel func()
 	ctx, cancel = context.WithCancel(ctx)
 
-	// Process each certificate in a goroutine
-	for _, incomingCert := range certs {
-		wg.Add(1)
-		go func(cert *certificates.VerifiableCertificate) {
-			defer wg.Done()
+	// Create a worker pool with number of workers
+	certChan := make(chan *certificates.VerifiableCertificate, len(certs))
+	errCh := make(chan error, workerPoolSize)
 
-			err := ValidateCertificate(ctx, verifierWallet, cert, identityKey, certificatesRequested)
-			if err != nil && ctx.Err() == nil {
-				errCh <- fmt.Errorf("certificate validation failed: %w", err)
+	// Start worker pool
+	for i := 0; i < workerPoolSize; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for cert := range certChan {
+				if ctx.Err() != nil {
+					return
+				}
+				err := ValidateCertificate(ctx, verifierWallet, cert, identityKey, certificatesRequested)
+				if err != nil && ctx.Err() == nil {
+					errCh <- fmt.Errorf("certificate validation failed: %w", err)
+				}
 			}
-		}(incomingCert)
+		}()
 	}
 
+	// Send certificates to workers
+	for _, cert := range certs {
+		certChan <- cert
+	}
+	close(certChan)
+
 	done := make(chan struct{})
-	// Wait for all goroutines to finish
+	// Wait for all workers to finish
 	go func() {
 		wg.Wait()
 		done <- struct{}{}
@@ -190,6 +202,10 @@ func verifyForRequestCertificates(cert *certificates.VerifiableCertificate, cert
 }
 
 func verifyForRequestedType(cert *certificates.VerifiableCertificate, certificatesRequested *RequestedCertificateSet) error {
+	if len(certificatesRequested.CertificateTypes) == 0 {
+		return nil
+	}
+
 	if cert.Type == "" {
 		return nil
 	}
