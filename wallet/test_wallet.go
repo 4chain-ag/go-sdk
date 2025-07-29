@@ -194,7 +194,7 @@ func (m *MockWalletMethods[A, R]) Do(handler func(ctx context.Context, args A, o
 // without having to set it individually for each method.
 func (m *TestWallet) ExpectOriginator(expectedOriginator string) {
 	m.globalExpectations = append(m.globalExpectations, func(ctx context.Context, args any, originator string) {
-		assert.Equal(m.t, originator, expectedOriginator)
+		assert.Equal(m.t, expectedOriginator, originator)
 	})
 }
 

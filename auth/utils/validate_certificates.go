@@ -95,12 +95,16 @@ func ValidateCertificates(
 	var wg sync.WaitGroup
 	var cancel func()
 	ctx, cancel = context.WithCancel(ctx)
+	defer cancel()
 
-	workerPoolSize := runtime.NumCPU()
+	workerPoolSize := len(certs)
+	if workerPoolSize > runtime.NumCPU() {
+		workerPoolSize = runtime.NumCPU()
+	}
 
 	// Create a worker pool with number of workers
 	certChan := make(chan *certificates.VerifiableCertificate, len(certs))
-	errCh := make(chan error, workerPoolSize)
+	errCh := make(chan error, 1)
 
 	// Start worker pool
 	for i := 0; i < workerPoolSize; i++ {
@@ -108,12 +112,14 @@ func ValidateCertificates(
 		go func() {
 			defer wg.Done()
 			for cert := range certChan {
-				if ctx.Err() != nil {
-					return
-				}
 				err := ValidateCertificate(ctx, verifierWallet, cert, identityKey, certificatesRequested)
-				if err != nil && ctx.Err() == nil {
-					errCh <- fmt.Errorf("certificate validation failed: %w", err)
+				if err != nil {
+					// ensure the go routine won't block on sending to channel
+					select {
+					case <-ctx.Done():
+					case errCh <- fmt.Errorf("certificate validation failed: %w", err):
+					default:
+					}
 				}
 			}
 		}()
@@ -135,13 +141,10 @@ func ValidateCertificates(
 	// Check for any errors
 	select {
 	case err := <-errCh:
-		cancel()
 		return errors.Join(ErrCertificateValidation, err)
 	case <-done:
-		cancel()
 		return nil
 	case <-ctx.Done():
-		cancel()
 		return ctx.Err()
 	}
 }
@@ -167,13 +170,8 @@ func ValidateCertificate(
 		return ctx.Err()
 	}
 	if err := cert.Verify(ctx); err != nil {
-		return fmt.Errorf("the signature for the certificate with serial number %s is invalid: %v",
+		return fmt.Errorf("the signature for the certificate with serial number %s is invalid: %w",
 			cert.SerialNumber, err)
-	}
-
-	// check for the context end
-	if ctx.Err() != nil {
-		return ctx.Err()
 	}
 	if err := verifyForRequestCertificates(cert, certificatesRequested); err != nil {
 		return err
@@ -184,7 +182,7 @@ func ValidateCertificate(
 		return ctx.Err()
 	}
 	if _, err := cert.DecryptFields(ctx, verifierWallet, false, ""); err != nil {
-		return fmt.Errorf("failed to decrypt certificate fields: %v", err)
+		return fmt.Errorf("failed to decrypt certificate fields: %w", err)
 	}
 
 	return nil
@@ -213,7 +211,7 @@ func verifyForRequestedType(cert *certificates.VerifiableCertificate, certificat
 
 	certType, err := cert.Type.ToArray()
 	if err != nil {
-		return fmt.Errorf("failed to convert certificate type to byte array: %v", err)
+		return fmt.Errorf("failed to convert certificate type to byte array: %w", err)
 	}
 
 	requestedFields, typeExists := certificatesRequested.CertificateTypes[certType]

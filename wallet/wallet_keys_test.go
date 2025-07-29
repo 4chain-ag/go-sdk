@@ -1,6 +1,7 @@
 package wallet
 
 import (
+	"encoding/hex"
 	"testing"
 
 	ec "github.com/bsv-blockchain/go-sdk/primitives/ec"
@@ -8,14 +9,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+var (
+	knownPrivBytes            = []byte{0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0x7, 0x8, 0x9, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x30, 0x31, 0x32}
+	knownPrivKey, knownPubKey = ec.PrivateKeyFromBytes(knownPrivBytes)
+	knownPrivKeyHex           = hex.EncodeToString(knownPrivBytes)
+	knownWIF                  = WIF(knownPrivKey.Wif())
+)
+
 // TestToPrivateKey tests the ToPrivateKey function
 func TestToPrivateKey(t *testing.T) {
-	// Create a known private key for testing
-	knownPrivBytes := []byte{0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0x7, 0x8, 0x9, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x30, 0x31, 0x32}
-	knownPrivKey, _ := ec.PrivateKeyFromBytes(knownPrivBytes)
-	knownPrivKeyHex := "0102030405060708091011121314151617181920212223242526272829303132"
-	knownWIF := WIF(knownPrivKey.Wif())
-
 	t.Run("string hex input", func(t *testing.T) {
 		privKey, err := ToPrivateKey(knownPrivKeyHex)
 		require.NoError(t, err)
@@ -69,10 +71,6 @@ func TestToPrivateKey(t *testing.T) {
 // TestToKeyDeriver tests the ToKeyDeriver function
 func TestToKeyDeriver(t *testing.T) {
 	// Create a known private key for testing
-	knownPrivBytes := []byte{0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0x7, 0x8, 0x9, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x30, 0x31, 0x32}
-	knownPrivKey, _ := ec.PrivateKeyFromBytes(knownPrivBytes)
-	knownPrivKeyHex := "0102030405060708091011121314151617181920212223242526272829303132"
-	knownWIF := WIF(knownPrivKey.Wif())
 	knownKeyDeriver := NewKeyDeriver(knownPrivKey)
 
 	t.Run("string hex input", func(t *testing.T) {
@@ -145,10 +143,7 @@ func TestToKeyDeriver(t *testing.T) {
 // TestToIdentityKey tests the ToIdentityKey function
 func TestToIdentityKey(t *testing.T) {
 	// Create a known private key for testing
-	knownPrivBytes := []byte{0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0x7, 0x8, 0x9, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x30, 0x31, 0x32}
-	knownPrivKey, knownPubKey := ec.PrivateKeyFromBytes(knownPrivBytes)
 	knownPubKeyHex := knownPubKey.ToDERHex()
-	knownWIF := WIF(knownPrivKey.Wif())
 	knownKeyDeriver := NewKeyDeriver(knownPrivKey)
 
 	t.Run("string input", func(t *testing.T) {
@@ -157,7 +152,7 @@ func TestToIdentityKey(t *testing.T) {
 		require.NotNil(t, pubKey)
 
 		// Verify the public key is correct
-		assert.Equal(t, knownPubKey.ToDERHex(), pubKey.ToDERHex())
+		assert.Equal(t, knownPubKeyHex, pubKey.ToDERHex())
 	})
 
 	t.Run("WIF input", func(t *testing.T) {
@@ -166,7 +161,7 @@ func TestToIdentityKey(t *testing.T) {
 		require.NotNil(t, pubKey)
 
 		// Verify the public key is correct
-		assert.Equal(t, knownPubKey.ToDERHex(), pubKey.ToDERHex())
+		assert.Equal(t, knownPubKeyHex, pubKey.ToDERHex())
 	})
 
 	t.Run("*KeyDeriver input", func(t *testing.T) {
@@ -175,7 +170,7 @@ func TestToIdentityKey(t *testing.T) {
 		require.NotNil(t, pubKey)
 
 		// Verify the public key is correct
-		assert.Equal(t, knownPubKey.ToDERHex(), pubKey.ToDERHex())
+		assert.Equal(t, knownPubKeyHex, pubKey.ToDERHex())
 	})
 
 	t.Run("*ec.PublicKey input", func(t *testing.T) {
