@@ -134,7 +134,7 @@ func NewTestWalletForRandomKey(t testing.TB, opts ...func(walletOpts *TestWallet
 // The created TestWallet uses a CompletedProtoWallet internally to implement
 // the wallet.Interface methods.
 // But allows you to override/mock part of them with OnXyz methods (see TestWallet description for details)
-func NewTestWallet[KeySource PrivateKeySource](t testing.TB, keySource KeySource, opts ...func(walletOpts *TestWalletOpts)) *TestWallet {
+func NewTestWallet[KeySource []byte | string | PrivateKeySource](t testing.TB, keySource KeySource, opts ...func(walletOpts *TestWalletOpts)) *TestWallet {
 	t.Helper()
 
 	privKey, err := ToPrivateKey(keySource)
