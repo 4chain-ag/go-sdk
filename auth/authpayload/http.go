@@ -24,7 +24,6 @@ const (
 
 var (
 	emptyJSONObject              = []byte("{}")
-	emptyBytes                   = make([]byte, 0)
 	methodsThatTypicallyHaveBody = []string{http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete}
 )
 
@@ -370,9 +369,6 @@ func readRequestBody(req *http.Request) ([]byte, error) {
 		contentType := req.Header.Get(contentTypeHeader)
 		if strings.Contains(contentType, contentTypeJSON) {
 			body = emptyJSONObject[:]
-		} else {
-			// If empty and not JSON, use empty string
-			body = emptyBytes[:]
 		}
 	}
 
