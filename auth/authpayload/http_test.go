@@ -124,7 +124,7 @@ func TestHTTPRequestPayloadSuccessfulSerializationAndDeserialization(t *testing.
 				require.NoError(t, err, "failed to read deserialized body")
 			}
 
-			assert.Equal(t, originalBody, deserializedBody)
+			assert.EqualValues(t, originalBody, deserializedBody)
 		})
 	}
 }

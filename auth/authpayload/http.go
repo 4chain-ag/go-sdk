@@ -17,26 +17,43 @@ import (
 	"github.com/bsv-blockchain/go-sdk/util"
 )
 
-var methodsThatTypicallyHaveBody = []string{"POST", "PUT", "PATCH", "DELETE"}
+const (
+	contentTypeHeader = "content-type"
+	contentTypeJSON   = "application/json"
+)
+
+var (
+	emptyJSONObject              = []byte("{}")
+	emptyBytes                   = make([]byte, 0)
+	methodsThatTypicallyHaveBody = []string{http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete}
+)
 
 // FromHTTPRequest serializes data from an HTTP request into an AuthMessage payload.
 func FromHTTPRequest(requestID []byte, req *http.Request) ([]byte, error) {
-	writer := util.NewWriter()
-	if len(requestID) != 32 {
+	if len(requestID) != brc104.RequestIDLength {
 		return nil, errors.New("request ID must be 32 bytes long")
 	}
 
+	writer := util.NewWriter()
+
 	writer.WriteBytes(requestID)
+
 	writer.WriteString(req.Method)
+
 	path := req.URL.Path
 	if path == "" {
+		// NOTICE: this fallback to "/" for an empty path is needed because server in Go will pass URL to handler with "/" instead of empty string,
+		// 	therefore, middleware will verify signature based on wrong assumption about the path, and signature will be considered invalid.
+		//  What's more, in JS (both node and browser) new URL(...) will also return "/" for an empty path, so it's aligned with that behavior.
 		path = "/"
 	}
 	writer.WriteString(path)
 
 	searchParams := req.URL.RawQuery
 	if searchParams != "" {
-		// auth client is using a query string with leading "?", so the middleware needs to include that character also.
+		// NOTICE: JS version of auth client is using a query string from new URL(...) which contains leading "?",
+		//  but in go URL RawQuery is not prefixed with "?",
+		//  therefore, we need to add it here to be aligned with the JS behavior.
 		searchParams = "?" + searchParams
 	}
 	writer.WriteOptionalString(searchParams)
@@ -64,6 +81,7 @@ func FromHTTPRequest(requestID []byte, req *http.Request) ([]byte, error) {
 	return writer.Buf, nil
 }
 
+// HttpRequestDeserializationOptions contains options for deserializing auth message payload into HTTP request.
 type HttpRequestDeserializationOptions struct {
 	BaseURL string
 }
@@ -118,7 +136,7 @@ func ToHTTPRequest(payload []byte, opts ...func(*HttpRequestDeserializationOptio
 		return nil, nil, fmt.Errorf("failed to read number of headers from payload to create http request: %w", err)
 	}
 
-	for i := 0; i < int(numHeaders); i++ {
+	for i := range numHeaders {
 		headerName, err := reader.ReadString()
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to read header[%d] name from payload to create http request: %w", i, err)
@@ -137,7 +155,7 @@ func ToHTTPRequest(payload []byte, opts ...func(*HttpRequestDeserializationOptio
 		return nil, nil, fmt.Errorf("failed to read body from payload to create http request: %w", err)
 	}
 
-	if len(body) != 0 && string(body) != "{}" {
+	if len(body) != 0 && !bytes.Equal(body, emptyJSONObject) {
 		req.Body = io.NopCloser(bytes.NewReader(body))
 	}
 
@@ -158,27 +176,38 @@ func FromHTTPResponse(requestID []byte, res *http.Response) ([]byte, error) {
 	})
 }
 
+// HttpResponseDeserializationOptions contains options for deserializing auth message payload into HTTP response.
 type HttpResponseDeserializationOptions struct {
 	senderPublicKey *ec.PublicKey
 }
 
+// WithSenderPublicKey sets the given sender public key in header of deserialized response.
 func WithSenderPublicKey(senderPublicKey *ec.PublicKey) func(*HttpResponseDeserializationOptions) {
 	return func(options *HttpResponseDeserializationOptions) {
 		options.senderPublicKey = senderPublicKey
 	}
 }
 
+// ToHTTPResponse converts a serialized payload into an http.Response, applying optional deserialization options.
+// You can use WithSenderPublicKey to ensure that the created http.Response will have the given sender public key in header.
 func ToHTTPResponse(payload []byte, opts ...func(*HttpResponseDeserializationOptions)) (requestID []byte, res *http.Response, err error) {
 	requestID, simpleRes, err := ToSimplifiedHttpResponse(payload, opts...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to retrieve http.Response from payload: %w", err)
 	}
 
+	var body io.ReadCloser
+	if len(simpleRes.Body) > 0 {
+		body = io.NopCloser(bytes.NewReader(simpleRes.Body))
+	} else {
+		body = http.NoBody
+	}
+
 	res = &http.Response{
 		StatusCode: simpleRes.StatusCode,
 		Status:     http.StatusText(simpleRes.StatusCode),
 		Header:     simpleRes.Header,
-		Body:       io.NopCloser(bytes.NewReader(simpleRes.Body)),
+		Body:       body,
 	}
 	if res.Status == "" {
 		res.Status = strconv.Itoa(res.StatusCode)
@@ -195,10 +224,11 @@ type SimplifiedHttpResponse struct {
 
 // FromResponse serializes data from a SimplifiedHttpResponse into an AuthMessage payload.
 func FromResponse(requestID []byte, res SimplifiedHttpResponse) ([]byte, error) {
-	writer := util.NewWriter()
-	if len(requestID) != 32 {
-		return nil, fmt.Errorf("invalid request ID for response payload, must be 32 bytes long, got %d", len(requestID))
+	if len(requestID) != brc104.RequestIDLength {
+		return nil, fmt.Errorf("invalid request ID for response payload, must be %d bytes long, got %d", brc104.RequestIDLength, len(requestID))
 	}
+
+	writer := util.NewWriter()
 	writer.WriteBytes(requestID)
 	writer.WriteVarInt(uint64(res.StatusCode))
 
@@ -219,6 +249,8 @@ func FromResponse(requestID []byte, res SimplifiedHttpResponse) ([]byte, error) 
 	return writer.Buf, nil
 }
 
+// ToSimplifiedHttpResponse converts a serialized payload into a SimplifiedHttpResponse, applying optional deserialization options.
+// You can use WithSenderPublicKey to ensure that the created http.Response will have the given sender public key in header.
 func ToSimplifiedHttpResponse(payload []byte, opts ...func(*HttpResponseDeserializationOptions)) (requestID []byte, res SimplifiedHttpResponse, err error) {
 	options := &HttpResponseDeserializationOptions{}
 	for _, opt := range opts {
@@ -242,17 +274,15 @@ func ToSimplifiedHttpResponse(payload []byte, opts ...func(*HttpResponseDeserial
 		return nil, res, fmt.Errorf("failed to read header count to create http response: %w", err)
 	}
 	responseHeaders := make(http.Header, nHeaders)
-	for i := uint32(0); i < nHeaders; i++ {
-		var headerKey, headerValue string
-
-		headerKey, err = responseReader.ReadString()
+	for i := range nHeaders {
+		headerKey, err := responseReader.ReadString()
 		if err != nil {
-			return nil, res, fmt.Errorf("failed to read header key to create http response: %w", err)
+			return nil, res, fmt.Errorf("failed to read header[%d] key to create http response: %w", i, err)
 		}
 
-		headerValue, err = responseReader.ReadString()
+		headerValue, err := responseReader.ReadString()
 		if err != nil {
-			return nil, res, fmt.Errorf("failed to read header value to create http response: %w", err)
+			return nil, res, fmt.Errorf("failed to read header[%d] value to create http response: %w", i, err)
 		}
 
 		responseHeaders.Add(headerKey, headerValue)
@@ -274,11 +304,13 @@ func ToSimplifiedHttpResponse(payload []byte, opts ...func(*HttpResponseDeserial
 	return requestID, res, nil
 }
 
+// IsHeaderToIncludeInRequest returns true if the header of given name should be included in the request.
 func IsHeaderToIncludeInRequest(headerName string) bool {
 	headerName = strings.ToLower(headerName)
 	return isBSVHeaderToInclude(headerName) || slices.Contains(brc104.NonXBSVIncludedRequestHeaders, headerName)
 }
 
+// IsHeaderToIncludeInResponse returns true if the header of given name should be included in the response.
 func IsHeaderToIncludeInResponse(headerName string) bool {
 	headerName = strings.ToLower(headerName)
 	return isBSVHeaderToInclude(headerName) || slices.Contains(brc104.NonXBSVIncludedResponseHeaders, headerName)
@@ -289,7 +321,7 @@ func isBSVHeaderToInclude(headerName string) bool {
 }
 
 func extractHeadersToInclude(headers http.Header, headersFilter func(headerName string) bool) ([]includedHeader, error) {
-	includedHeaders := make([]includedHeader, 0)
+	var includedHeaders []includedHeader
 	for name, values := range headers {
 		headerKey := strings.ToLower(name)
 		if !headersFilter(headerKey) {
@@ -301,7 +333,7 @@ func extractHeadersToInclude(headers http.Header, headersFilter func(headerName 
 		}
 
 		value := values[0]
-		if headerKey == "content-type" {
+		if headerKey == contentTypeHeader {
 			value = strings.SplitN(value, ";", 2)[0]
 		}
 
@@ -335,12 +367,12 @@ func readRequestBody(req *http.Request) ([]byte, error) {
 	// If method typically carries a body and body is empty, default it
 	if len(body) == 0 && slices.Contains(methodsThatTypicallyHaveBody, strings.ToUpper(req.Method)) {
 		// Check if content-type is application/json
-		contentType := req.Header.Get("content-type")
-		if strings.Contains(contentType, "application/json") {
-			body = []byte("{}")
+		contentType := req.Header.Get(contentTypeHeader)
+		if strings.Contains(contentType, contentTypeJSON) {
+			body = emptyJSONObject[:]
 		} else {
 			// If empty and not JSON, use empty string
-			body = []byte("")
+			body = emptyBytes[:]
 		}
 	}
 

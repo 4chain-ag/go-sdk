@@ -66,14 +66,8 @@ type WalletKeySource interface {
 //     var pk *ec.PrivateKey = ...
 //     privKey, err := ToPrivateKey(pk)
 //     ```
-func ToPrivateKey[KeySource []byte | string | PrivateKeySource](keySource KeySource) (*ec.PrivateKey, error) {
+func ToPrivateKey[KeySource PrivateKeySource](keySource KeySource) (*ec.PrivateKey, error) {
 	switch k := any(keySource).(type) {
-	case []byte:
-		// the second result is public key.
-		priv, _ := ec.PrivateKeyFromBytes(k)
-		return priv, nil
-	case string:
-		return ToPrivateKey(PrivHex(k))
 	case PrivHex:
 		priv, err := k.PrivateKey()
 		if err != nil {
@@ -127,14 +121,8 @@ func ToPrivateKey[KeySource []byte | string | PrivateKeySource](keySource KeySou
 //     var pk *ec.PrivateKey = ...
 //     keyDeriver, err := ToKeyDeriver(pk)
 //     ```
-func ToKeyDeriver[KeySource []byte | string | WalletKeySource](keySource KeySource) (*KeyDeriver, error) {
+func ToKeyDeriver[KeySource WalletKeySource](keySource KeySource) (*KeyDeriver, error) {
 	switch k := any(keySource).(type) {
-	case []byte:
-		// the second result is public key.
-		priv, _ := ec.PrivateKeyFromBytes(k)
-		return NewKeyDeriver(priv), nil
-	case string:
-		return ToKeyDeriver(PrivHex(k))
 	case PrivHex:
 		priv, err := k.PrivateKey()
 		if err != nil {
