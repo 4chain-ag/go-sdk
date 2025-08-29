@@ -223,10 +223,8 @@ type IdentityKeySource interface {
 //     ```go
 //     pubKey, err := ToIdentityKey(WIF("L1..."))
 //     ```
-func ToIdentityKey[KeySource string | IdentityKeySource](keySource KeySource) (*ec.PublicKey, error) {
+func ToIdentityKey[KeySource IdentityKeySource](keySource KeySource) (*ec.PublicKey, error) {
 	switch k := any(keySource).(type) {
-	case string:
-		return ToIdentityKey(PubHex(k))
 	case PubHex:
 		pubKey, err := k.PublicKey()
 		if err != nil {
